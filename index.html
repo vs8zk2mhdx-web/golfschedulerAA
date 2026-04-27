@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Ladies Golf League — Tee Time Scheduler</title>
+<title>Ladies Golf League · Pairs — Tee Time Scheduler (Pairs)</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Source+Sans+3:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -520,7 +520,7 @@ button { cursor: pointer; font-family: 'Source Sans 3', sans-serif; transition: 
   <div class="logo">
     <div class="logo-icon">⛳</div>
     <div class="logo-text">
-      <h1>Ladies Golf League</h1>
+      <h1>Ladies Golf League · Pairs</h1>
       <p>Tee Time Scheduler</p>
     </div>
   </div>
@@ -1569,25 +1569,51 @@ function scheduleWeek() {
           let rem=[...members];
           for (const sl of slots) { while(cap(sl)>0&&rem.length) sl.players.push(rem.shift()); if(!rem.length) break; }
         }
+      } else if (members.length === 2) {
+        // ── PAIRS POLICY: CP group of 2 — ALWAYS placed in the same slot ──────
+        function slotScore(sl, mems) {
+          return sl.players.reduce((sum, occ) =>
+            sum + mems.reduce((s2, m) => s2 + pairScore(occ.name, m.name), 0), 0);
+        }
+        let placed = false;
+        // Pass 1: best allowed slot with room for both
+        {
+          const candidates = allowed
+            .map(si => slotOf(si))
+            .filter(sl => sl && cap(sl) >= 2)
+            .sort((a, b) => slotScore(a, members) - slotScore(b, members));
+          if (candidates.length) {
+            members.forEach(m => candidates[0].players.push(m));
+            placed = true;
+          }
+        }
+        // Pass 2: relax — any slot in block with room for both
+        if (!placed) {
+          const candidates = blockSlots
+            .map(si => slotOf(si))
+            .filter(sl => sl && cap(sl) >= 2)
+            .sort((a, b) => slotScore(a, members) - slotScore(b, members));
+          if (candidates.length) {
+            members.forEach(m => candidates[0].players.push(m));
+            placed = true;
+          }
+        }
+        // Last resort
+        if (!placed) {
+          let rem = [...members];
+          for (const sl of slots) { while(cap(sl)>0&&rem.length) sl.players.push(rem.shift()); if(!rem.length) break; }
+        }
+
       } else {
-        // 2 or 3 members: split across 2 consecutive slots when possible so that
-        // each member mixes with different non-carpool players each week.
-        // Slot selection is guided by pairing history — prefer slots whose current
-        // occupants have been paired least often with these members.
+        // 3+ members: split across 2 consecutive slots when possible
         let placed = false;
 
-        // Score a slot for a set of members (lower = fewer repeated pairings)
         function slotScore(sl, mems) {
           return sl.players.reduce((sum, occ) =>
             sum + mems.reduce((s2, m) => s2 + pairScore(occ.name, m.name), 0), 0);
         }
 
-        // Pass 1: split across 2 consecutive allowed slots, chosen by pairing score.
-        // For a group of 3, all 3 possible 2+1 splits are evaluated so that the
-        // pair placed in the same slot rotates each week (preventing Laurie+Ursula
-        // from always landing together while Louise goes elsewhere).
         {
-          // Build all candidate slot-pairs in the allowed range
           const slotPairs = [];
           for (const si of allowed) {
             const ni = si + 1;
@@ -1597,28 +1623,19 @@ function scheduleWeek() {
               slotPairs.push({s1, s2});
           }
           if (slotPairs.length) {
-            // For each slot-pair, try every way to split members into the two slots
-            // and pick the combination with the lowest within-slot pairing score.
             let bestScore = Infinity, bestS1 = null, bestS2 = null,
                 bestGrp1 = null, bestGrp2 = null;
+            function combos(arr, k) {
+              if (k === 0) return [[]];
+              if (arr.length === k) return [arr.slice()];
+              const [first, ...rest] = arr;
+              return [...combos(rest, k-1).map(c=>[first,...c]), ...combos(rest, k)];
+            }
             for (const {s1, s2} of slotPairs) {
-              // Generate all ways to assign members to s1 vs s2
-              // (each member goes to exactly one slot; s1 gets ceil(n/2), s2 gets floor(n/2))
-              const n = members.length;
-              const size1 = Math.ceil(n / 2);
-              // Enumerate combinations for s1
-              function combos(arr, k) {
-                if (k === 0) return [[]];
-                if (arr.length === k) return [arr.slice()];
-                const [first, ...rest] = arr;
-                return [...combos(rest, k-1).map(c=>[first,...c]), ...combos(rest, k)];
-              }
+              const size1 = Math.ceil(members.length / 2);
               for (const grp1 of combos(members, size1)) {
                 const grp2 = members.filter(m => !grp1.includes(m));
-                // Only consider splits where both slots have enough capacity
                 if (cap(s1) < grp1.length || cap(s2) < grp2.length) continue;
-                // Score = within-slot pairings (how often these specific sub-groups
-                // have played together) + cross-slot occupant score
                 let score = 0;
                 for (let i=0;i<grp1.length;i++)
                   for (let j=i+1;j<grp1.length;j++)
@@ -1641,8 +1658,6 @@ function scheduleWeek() {
           }
         }
 
-        // Pass 2: no consecutive pair available — fit all into single allowed slot
-        // (chosen by pairing score)
         if (!placed) {
           const candidates = allowed
             .map(si => slotOf(si))
@@ -1654,8 +1669,6 @@ function scheduleWeek() {
           }
         }
 
-        // Pass 3: relax constraint — split across any 2 consecutive slots in block
-        // Same history-aware split logic as Pass 1.
         if (!placed) {
           const slotPairs3 = [];
           for (const si of blockSlots) {
@@ -1689,13 +1702,11 @@ function scheduleWeek() {
           }
         }
 
-        // Pass 4: relax constraint — any single slot with room
         if (!placed) {
           const sl = slots.find(sl => cap(sl) >= members.length);
           if (sl) { members.forEach(m => sl.players.push(m)); placed=true; }
         }
 
-        // Last resort: greedy fill anywhere
         if (!placed) {
           let rem=[...members];
           for (const sl of slots) { while(cap(sl)>0&&rem.length) sl.players.push(rem.shift()); if(!rem.length) break; }
